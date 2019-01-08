@@ -1,0 +1,5 @@
+# url,profile
+https://downloads.openwrt.org/snapshots/targets/x86/64/openwrt-imagebuilder-x86-64.Linux-x86_64.tar.xz
+https://downloads.openwrt.org/releases/18.06.1/targets/x86/64/openwrt-imagebuilder-18.06.1-x86-64.Linux-x86_64.tar.xz
+https://downloads.openwrt.org/snapshots/targets/ipq806x/generic/openwrt-imagebuilder-ipq806x.Linux-x86_64.tar.xz,netgear_r7800
+https://downloads.openwrt.org/releases/18.06.1/targets/ipq806x/generic/openwrt-imagebuilder-18.06.1-ipq806x.Linux-x86_64.tar.xz,netgear_r7800
