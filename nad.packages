@@ -1,4 +1,7 @@
 # kernel
+kmod-hid
+kmod-hid-generic
+kmod-input-evdev
 kmod-usb2
 kmod-usb3
 kmod-usb-core
