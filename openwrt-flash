@@ -1,0 +1,281 @@
+#!/bin/bash
+
+# josephtingiris@gmail.com
+
+# build openwrt flash images
+
+function aborting() {
+    local msg="$@"
+    printf "\naborting ... $msg\n"
+    exit 1
+}
+
+function buildX86CombinedVmdk() {
+
+    local image_names="$1"
+    if [ "$image_names" == "" ]; then
+        image_names="*"
+    fi
+
+    local image image_gz image_vmdk
+
+    while read image_gz; do
+        if [ "$image_gz" == "" ] || [ ! -r "${image_gz}" ]; then
+            continue
+        fi
+
+        image=${image_gz%%.gz*}
+        image_vmdk=${image}.vmdk
+
+        if [ -r "${image_vmdk}" ]; then
+            if [ "${2}" == "clean" ]; then
+                pprint "REBUILD = ${image_vmdk}"
+            else
+                pprint "CHECK = ${image_vmdk}"
+                continue
+            fi
+        else
+            pprint "BUILD = ${image_vmdk}"
+        fi
+
+        gunzip "${image_gz}"
+        if [ $? -ne 0 ]; then
+            continue
+        fi
+        qemu-img convert -f raw -O vmdk "${image}" "${image_vmdk}"
+
+        gzip "${image}"
+        if [ $? -ne 0 ]; then
+            aborting "gzip ${image} failed"
+        fi
+
+        image="" image_vmdk=""
+    done <<< "$(find "${Top_Dir}" -name "*-${image_names}-*x86-*combined-*.img.gz" 2> /dev/null)"
+
+}
+
+function pprint() {
+    local msg="$@"
+    msg_a=${msg%%=*}
+    msg_b=${msg##*=}
+    if [ "${msg_a}" == "${msg}" ]; then
+        printf "%b\n" "$msg"
+    else
+        printf "%-32b = %b\n" "${msg_a}" "${msg_b}"
+    fi
+}
+
+function usage() {
+    printf "\nusage: $0 <image name|vmdk> [clean]\n\n"
+    exit 1
+}
+
+# main
+
+if [ "${1}" == "" ]; then
+    usage
+fi
+
+umask 022
+
+Image_Name="${1}"
+pprint "Image_Name = ${Image_Name}"
+
+Top_Dir=$(pwd)
+
+Archetype_Dir=${Top_Dir}/archetype
+Image_Build=${Top_Dir}/${Image_Name}.build
+Image_Name_Dir=${Top_Dir}/${Image_Name}.img
+Image_Root_Dir=${Top_Dir}/${Image_Name}.root
+Image_Readme="${Image_Root_Dir}/README.build"
+Tmp_Dir=${Top_Dir}/${Image_Name}.tmp
+
+if [ "$2" == "clean" ]; then
+    if [ -w "${Tmp_Dir}" ] && [ "${Tmp_Dir}" != "" ] && [ "${Tmp_Dir}" != "/" ]; then
+        rm -rf "${Tmp_Dir}/"*
+    else
+        aborting "${Tmp_Dir} directory invalid"
+    fi
+    if [ -w "${Image_Build}" ] && [ "${Image_Build}" != "" ] && [ "${Image_Build}" != "/" ]; then
+        rm -f "${Image_Build}"
+    fi
+fi
+
+if [ "${Image_Name}" != "vmdk" ]; then
+
+    for DIR in Archetype_Dir Image_Name_Dir Image_Root_Dir Tmp_Dir Top_Dir; do
+        if [ "${!DIR}" == "" ]; then
+            aborting "${DIR} is empty"
+        fi
+        if [ ! -d ${!DIR} ]; then
+            mkdir -p ${!DIR}
+            if [ $? -eq 0 ]; then
+                pprint "${DIR} = ${!DIR} (CREATED)"
+            else
+                aborting "mkdir ${!DIR} failed"
+            fi
+        else
+            if [ -w "${!DIR}" ]; then
+                pprint "${DIR} = ${!DIR} (OK)"
+            else
+                aborting "${!DIR} directory not writable"
+            fi
+        fi
+    done
+
+    Image_Date=$(date +%Y%m%d)
+
+    Image_Build_Count=1
+    if [ -r "${Image_Build}" ]; then
+        Image_Build_Count=$(head -1 "${Image_Build}" | awk -F- '{print $NF}')
+        if [[ ${Image_Build_Count} =~ ^[0-9]+$ ]]; then
+            # it's an integer
+            ((Image_Build_Count++))
+        else
+            Image_Build_Count=1
+        fi
+    fi
+    echo "${Image_Build_Count}" > "${Image_Build}"
+    Extra_Image_Name="${Image_Name}-${Image_Date}-${Image_Build_Count}"
+    pprint "Extra_Image_Name = ${Extra_Image_Name}"
+
+    #
+    # load image data (mandatory)
+    #
+
+    Images=()
+    Image_Data="${Top_Dir}/${Image_Name}.data"
+    if [ -r "${Image_Data}" ]; then
+        Images=($(cat "${Image_Data}" | grep -v ^'#' | awk -F'#' '{print $1}' | sort -u))
+    else
+        aborting "${Image_Data} file not readable"
+    fi
+
+    if [ "${Images}" != "" ]; then
+        pprint "Image_Data = ${Image_Data} (OK)"
+    else
+        aborting "${Image_Data} is empty"
+    fi
+
+    #
+    # load package data (if any)
+    #
+
+    Packages=()
+    Package_Data="${Top_Dir}/${Image_Name}.packages"
+    if [ -r "${Image_Data}" ]; then
+        Packages=($(cat "${Package_Data}" | grep -v ^'#' | awk -F'#' '{print $1}' | sort -u))
+    fi
+
+    if [ "${Packages}" != "" ]; then
+        pprint "Package_Data = ${Package_Data} (CUSTOM)"
+    else
+        pprint "Package_Data = ${Package_Data} (DEFAULT)"
+    fi
+
+    let Image_Counter=0
+    for Image in ${Images[@]}; do
+        ((++Image_Counter))
+        pprint "[${Image_Counter}] Processing = ${Extra_Image_Name}"
+
+        cd "${Tmp_Dir}"
+        if [ $? -ne 0 ]; then
+            pwd
+            aborting "cd ${Tmp_Dir} failed"
+        fi
+
+        Image_Url=$(echo ${Image} | awk -F, '{print $1}')
+        if [ "${Image_Url}" == "" ]; then
+            aborting "Image_Url is empty"
+        else
+            pprint "[${Image_Counter}] Image_Url = ${Image_Url}"
+        fi
+
+        Image_Tar_Xz=$(basename ${Image_Url})
+        if [ "${Image_Tar_Xz}" == "" ] || [ "${Image_Tar_Xz:${#Image_Tar_Xz}-7:7}" != ".tar.xz" ]; then
+            aborting "Image_Tar_Xz is invalid ${Image_Tar_Xz:${#Image_Tar_Xz}-7:7}"
+        else
+            pprint "[${Image_Counter}] Image_Tar_Xz = ${Image_Tar_Xz}"
+        fi
+
+        Image_Dir=${Tmp_Dir}/$(echo "${Image_Tar_Xz}" | sed -e '/.tar.xz$/s///g')
+
+        Image_File=${Tmp_Dir}/${Image_Tar_Xz}
+        if [ -r "${Image_File}" ]; then
+            pprint "[${Image_Counter}] Image_File = ${Image_File} (OK)"
+        else
+            curl -s -L -k -O "${Image_Url}"
+            curl_rc=$?
+            if [ $curl_rc -eq 0 ] ; then
+                pprint "[${Image_Counter}] Image_File = ${Image_File} (CURL)"
+            else
+                aborting "curl error, rc=$curl_rc"
+            fi
+            if [ ! -r "${Image_File}" ]; then
+                aborting "${Image_File} file not readable"
+            fi
+        fi
+
+        if [ -d ${Image_Dir} ]; then
+            pprint "[${Image_Counter}] Image_Dir = ${Image_Dir} (OK)"
+        else
+            xzcat ${Image_File} | tar -xf -
+            xzcat_rc=$?
+            if [ $xzcat_rc -eq 0 ] ; then
+                pprint "[${Image_Counter}] Image_Dir = ${Image_File} (XZCAT)"
+            else
+                aborting "xzcat error, rc=$xzcat_rc"
+            fi
+            if [ ! -w "${Image_File}" ]; then
+                aborting "${Image_Dir} directory not writable"
+            fi
+        fi
+
+        cd "${Image_Dir}"
+        if [ $? -ne 0 ]; then
+            pwd
+            aborting "cd ${Image_Dir} failed"
+        fi
+
+        Image_Profile=$(echo ${Image} | awk -F, '{print $2}')
+        if [ "${Image_Profile}" == "" ]; then
+            pprint "[${Image_Counter}] Image_Profile = DEFAULT"
+            Image_Profile="."
+        else
+            pprint "[${Image_Counter}] Image_Profile = ${Image_Profile}"
+        fi
+
+        Make_Profile=$(make info | grep :$ | grep -v Available\ Profiles | grep ${Image_Profile} | sed -e '/:$/s///g')
+        if [ "${Make_Profile}" == "" ]; then
+            pprint "[${Image_Counter}] Image_Profile = DEFAULT"
+            Image_Profile="."
+        fi
+
+        Make_Profile=$(make info | grep :$ | grep -v Available\ Profiles | grep ${Image_Profile} | sed -e '/:$/s///g')
+
+        pprint "[${Image_Counter}] Make_Profile = ${Make_Profile}"
+
+        echo "Name     = ${Extra_Image_Name}" > "${Image_Readme}"
+        echo "URL      = ${Image_Url}" >> "${Image_Readme}"
+        echo "Profile  = ${Make_Profile}" >> "${Image_Readme}"
+
+        if [ "$2" == "clean" ]; then
+            make clean
+        fi
+
+        echo
+        echo "make image PROFILE=${Make_Profile} PACKAGES=\"${Packages[@]}\" EXTRA_IMAGE_NAME=\"${Extra_Image_Name}\" BIN_DIR=${Image_Name_Dir} FILES=${Image_Root_Dir}/" > make.${Extra_Image_Name}
+        cat make.${Extra_Image_Name}
+        source make.${Extra_Image_Name}
+        if [ $? -ne 0 ]; then
+            aborting "make failed"
+        fi
+        echo
+
+        # done, unset
+        unset -v Image_Url Image_Profile Image_Tar_Xz Image_Dir Image_File Make_Profile
+    done
+fi
+
+buildX86CombinedVmdk "${Extra_Image_Name}"
+
