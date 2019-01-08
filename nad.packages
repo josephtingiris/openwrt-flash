@@ -1,4 +1,12 @@
-# disk utils
+# kernel
+kmod-usb2
+kmod-usb3
+kmod-usb-core
+kmod-usb-ehci
+kmod-usb-hid
+kmod-usb-storage
+kmod-usb-uhci
+# disk
 block-mount
 cryptsetup
 fdisk
@@ -6,8 +14,13 @@ fdisk
 luci-ssl-openssl
 luci-theme-bootstrap
 # GUI - optional
-# sys utils
+# sys
+lsblk
 sysfsutils
-# network utils
+# network
 nmap
 rsync
+# usb
+usb-modeswitch
+usbreset
+usbutils
