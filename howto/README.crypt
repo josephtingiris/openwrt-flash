@@ -1,0 +1,611 @@
+Thoughts ...
+
+The trick is to put the key in the firmware image (e.g. via ImageBuilder), so it's available ON A SEPARATE DEVICE.  While imperfect, it does provide encryption at rest for the removable drive and it's fairly difficult to get the key file off the firmware unless you've got the root password to the device or can dump, open, & mount the firmware elswhere.  Difficult, to say the least.  If you're ultra paranoid then just keep using the passphrase and re-mounting swap & overlay manually every time operwrt boots.
+
+
+mdadm --assemble --verbose /dev/md0
+
+HOWTO Setup & boot Openwrt 18 with encrypted overlay & swap on an external disk (or RAID).
+
+1) Ensure openwrt has all of the correct packages.
+
+I used ImageBuilder to make the images that use this procedure.  This was tested and is used on x86-64 (squashfs) & Netgear R7800s.  If you don't want to go that route then nudge me & I'll sort out the opkg installs and update this again later ...
+
+2) Verify raw device exists, it will be overwritten. In this case, the new/raw device is /dev/sdb.  A truly blank device will *not* show up in block info (yet).  Though, it may if it has partitions on it already.  Again, all that will be overwritten.
+
+block info
+
+root@OpenWrt:~# block info
+/dev/loop0: UUID="c6e14bcb-67b4-46ed-9b6d-a5b06c0e15e4" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="0362c5e8-6a40678e-eda85754-f05649c3" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+
+root@OpenWrt:~# fdisk -l
+Disk /dev/loop0: 103 MiB, 108003328 bytes, 210944 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+
+
+Disk /dev/sda: 128 MiB, 134217728 bytes, 262144 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x9415a0ab
+
+Device     Boot Start    End Sectors  Size Id Type
+/dev/sda1  *      512  33279   32768   16M 83 Linux
+/dev/sda2       33792 558079  524288  256M 83 Linux
+
+
+Disk /dev/sdb: 2 GiB, 2147483648 bytes, 4194304 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0xdcc6af2f
+
+
+4) Create a luks crypt on the block (meta) device.  Here, I'm encrypting all of /dev/md0 because I want to add an encrypted swap and overlay partition inside a single volume group.  The crypt *must* be opened and the logical volumes online *before* uci tries to mount /etc/config/fstab
+
+3a) Read 2.8 Encryption on top of RAID or the other way round?
+
+see: https://gitlab.com/cryptsetup/cryptsetup/wikis/FrequentlyAskedQuestions#2-setup
+
+
+3b) If you don't want to setup a meta device then skip to Step 3e.  I'm choosing to setup an md RAID first, with only a single disk as a RAID 1 (mirror).  It's a simple step, regardless of whether or when/not more disks are added ... however, it's optional.  The benefits are to allow for future growth, redundancy under the crypt, etc.
+
+see: https://raid.wiki.kernel.org/index.php/A_guide_to_mdadm#Upgrading_a_mirror_raid_to_a_parity_raid
+
+root@OpenWrt:~# mdadm --create --verbose /dev/md0 --level=mirror --raid-devices=2 /dev/sdb missing
+mdadm: partition table exists on /dev/sdb
+mdadm: partition table exists on /dev/sdb but will be lost or
+       meaningless after creating array
+mdadm: Note: this array has metadata at the start and
+    may not be suitable as a boot device.  If you plan to
+    store '/boot' on this device please ensure that
+    your boot-loader understands md/v1.x metadata, or use
+    --metadata=0.90
+mdadm: size set to 2095104K
+Continue creating array? y
+mdadm: Defaulting to version 1.2 metadata
+mdadm: array /dev/md0 started.
+
+
+3c) Verify block info sees the meta device.  Compare that to Step 1.
+
+root@OpenWrt:~# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+
+3d) Show the misc detail of the RAID.
+
+root@OpenWrt:~# ls -ld /dev/md0
+brw-------    1 root     root        9,   0 Jan  2 01:24 /dev/md0
+
+root@OpenWrt:~# mdadm --misc --detail /dev/md0
+/dev/md0:
+        Version : 1.2
+  Creation Time : Wed Jan  2 01:24:29 2019
+     Raid Level : raid1
+     Array Size : 2095104 (2046.00 MiB 2145.39 MB)
+  Used Dev Size : 2095104 (2046.00 MiB 2145.39 MB)
+   Raid Devices : 2
+  Total Devices : 1
+    Persistence : Superblock is persistent
+
+    Update Time : Wed Jan  2 01:24:29 2019
+          State : clean, degraded
+ Active Devices : 1
+Working Devices : 1
+ Failed Devices : 0
+  Spare Devices : 0
+
+           Name : OpenWrt:0  (local to host OpenWrt)
+           UUID : e0b635e1:3a4fd2db:e9ff1ae2:052cd032
+         Events : 0
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       -       0        0        1      removed
+
+
+
+3e) IMPORTANT: Verify the uuid in /etc/config/mdadm matches the mdadm --misc --detail and block info (above), fix it if it doesn't!!!
+
+root@OpenWrt:~# cat /etc/config/mdadm
+config mdadm
+        option email root
+        # list devices /dev/hd*
+        # list devices /dev/sd*
+        # list devices partitions
+
+config array
+        option uuid e0b635e1:3a4fd2db:e9ff1ae2:052cd032
+        option device /dev/md0
+        # option name raid:0
+        # option super_minor 0
+        # list devices /dev/sda1
+        # list devices /dev/sdb1
+        # option spares 0
+        # option spare_group spares
+        # option bitmap /bitmap.md
+        # option container 00000000:00000000:00000000:00000000
+        # option member 1
+
+
+3f) Setup a luks crypt on the block (meta) device.
+
+cryptsetup -y luksFormat /dev/md0
+
+root@OpenWrt:~# cryptsetup -y luksFormat /dev/md0
+
+WARNING!
+========
+This will overwrite data on /dev/md0 irrevocably.
+
+Are you sure? (Type uppercase yes): YES
+Enter passphrase:
+Verify passphrase:
+
+
+
+4) Verify block info sees the crypt.  Compare this to the output in Step 1 (and/or 3c).
+
+block info
+
+root@OpenWrt:~# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+
+
+5) Open the crypt with the passphrase it was formatted with. A generated, random key file will be added later, to another keyslot (so that it can automatically mount on boot).
+
+
+cryptsetup luksOpen /dev/md0 luks-2084de11-70c4-4521-8f95-6113e75f1fe9 # the name can be anything; I prefer the name contains the UUID
+
+root@OpenWrt:~# cryptsetup -y luksOpen /dev/md0 luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+Enter passphrase for /dev/md0:
+Verify passphrase:
+
+
+
+6) Verify the crypt has a block device mapped in the kernel.  Notice brw------- ....
+
+root@OpenWrt:~# ls -l /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+brw-------    1 root     root      253,   0 Jan  1 23:50 /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+
+
+
+
+7) Create a physical volume in the crypt.
+
+root@OpenWrt:~# pvcreate /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+  Physical volume "/dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9" successfully created.
+
+root@OpenWrt:/etc/config# pvs
+  PV                                                    VG    Fmt  Attr PSize PFree
+  /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9 crypt lvm2 a--  1.99g    0
+
+
+
+8) Create a volume group in the crypt.
+
+root@OpenWrt:~# vgcreate crypt /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+  Volume group "crypt" successfully created
+
+root@OpenWrt:~# vgs
+  VG    #PV #LV #SN Attr   VSize  VFree
+  crypt   1   0   0 wz--n- <2.00g <2.00g
+
+
+9) Create logical volumes in the crypt volume group.
+
+9a) swap
+
+root@OpenWrt:~# lvcreate --size 1G --name swap crypt
+  Logical volume "swap" created.
+
+9b) overlay
+
+root@OpenWrt:~# lvcreate --name overlay -l 100%FREE crypt
+  Logical volume "overlay" created.
+
+
+
+10) Verify block info sees the crypt LVM2_member.  Compare this to the output in Step 4.
+
+root@OpenWrt:/etc/config# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+/dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9: UUID="0zop6g-3jqS-IGST-ocWa-XQXj-QSdm-SVH7WO" TYPE="LVM2_member"
+
+
+10a) Look at the physical volume, volume group, and logical volumes.
+
+root@OpenWrt:/etc/config# ls -l /dev/mapper/
+crw-------    1 root     root       10, 236 Jan  2 02:41 control
+brw-------    1 root     root      252,   2 Jan  2 03:02 crypt-overlay
+brw-------    1 root     root      252,   1 Jan  2 03:02 crypt-swap
+brw-------    1 root     root      252,   0 Jan  2 02:52 luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+
+# NOTE: if they're not there, in /dev/mapper, try ...
+
+# lvscan
+
+root@OpenWrt:/etc/config# lvscan
+  inactive          '/dev/crypt/swap' [1.00 GiB] inherit
+  inactive          '/dev/crypt/overlay' [1016.00 MiB] inherit
+
+
+root@OpenWrt:/etc/config# lvchange -a y crypt # will activate them
+
+root@OpenWrt:/etc/config# lvscan
+  ACTIVE            '/dev/crypt/swap' [1.00 GiB] inherit
+  ACTIVE            '/dev/crypt/overlay' [1016.00 MiB] inherit
+
+root@OpenWrt:/etc/config# pvdisplay; vgdisplay; lvdisplay
+  --- Physical volume ---
+  PV Name               /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+  VG Name               crypt
+  PV Size               <2.00 GiB / not usable 4.00 MiB
+  Allocatable           yes (but full)
+  PE Size               4.00 MiB
+  Total PE              510
+  Free PE               0
+  Allocated PE          510
+  PV UUID               0zop6g-3jqS-IGST-ocWa-XQXj-QSdm-SVH7WO
+
+  --- Volume group ---
+  VG Name               crypt
+  System ID
+  Format                lvm2
+  Metadata Areas        1
+  Metadata Sequence No  3
+  VG Access             read/write
+  VG Status             resizable
+  MAX LV                0
+  Cur LV                2
+  Open LV               0
+  Max PV                0
+  Cur PV                1
+  Act PV                1
+  VG Size               1.99 GiB
+  PE Size               4.00 MiB
+  Total PE              510
+  Alloc PE / Size       510 / 1.99 GiB
+  Free  PE / Size       0 / 0
+  VG UUID               y1xOg9-7nIZ-rBdy-mbPF-Nzr4-puLS-FqwD8x
+
+  --- Logical volume ---
+  LV Path                /dev/crypt/swap
+  LV Name                swap
+  VG Name                crypt
+  LV UUID                pGNc8c-r0j3-sYeh-ziuK-hJGb-Z1JY-wjDzMv
+  LV Write Access        read/write
+  LV Creation host, time OpenWrt, 2019-01-02 01:48:27 +0000
+  LV Status              available
+  # open                 0
+  LV Size                1.00 GiB
+  Current LE             256
+  Segments               1
+  Allocation             inherit
+  Read ahead sectors     auto
+  - currently set to     256
+  Block device           252:1
+
+  --- Logical volume ---
+  LV Path                /dev/crypt/overlay
+  LV Name                overlay
+  VG Name                crypt
+  LV UUID                Rtd2Sl-1fc2-xHWy-hWdc-d5B6-5uQq-kGn7mh
+  LV Write Access        read/write
+  LV Creation host, time OpenWrt, 2019-01-02 01:48:37 +0000
+  LV Status              available
+  # open                 0
+  LV Size                1016.00 MiB
+  Current LE             254
+  Segments               1
+  Allocation             inherit
+  Read ahead sectors     auto
+  - currently set to     256
+  Block device           252:2
+
+
+
+11) Format the new logical volume block devices that were mapped by lvm2.
+
+11a) Format swap
+
+root@OpenWrt:~# mkswap /dev/mapper/crypt-swap
+Setting up swapspace version 1, size = 1073737728 bytes
+
+
+11b) Format overlap ... I'm fond of using & showing xfs here because I prefer it for large devices and on machines with lower thread counts (like openwrt routers).  Granted this example is only a 2G device, however the drives I have in production are much (much) larger & xfs outperforms ext4 on machines with low thread counts (and handles fsck & journal replay on large drives much more gracefully than ext4).  xfs has many pros.  Use what you choose ...
+
+root@OpenWrt:~# mkfs.xfs -f /dev/mapper/crypt-overlay
+meta-data=/dev/mapper/crypt-overlay isize=512    agcount=4, agsize=65280 blks
+         =                       sectsz=512   attr=2, projid32bit=1
+         =                       crc=1        finobt=1, sparse=0, rmapbt=0, reflink=0
+data     =                       bsize=4096   blocks=261120, imaxpct=25
+         =                       sunit=0      swidth=0 blks
+naming   =version 2              bsize=4096   ascii-ci=0 ftype=1
+log      =internal log           bsize=4096   blocks=855, version=2
+         =                       sectsz=512   sunit=0 blks, lazy-count=1
+realtime =none                   extsz=4096   blocks=0, rtextents=0
+
+
+
+12) Verify block info sees the crypt-overlay (xfs) and crypt-swap (swap) logical volumes.  Compare this to the output in Step 10.
+
+root@OpenWrt:/mnt# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+/dev/mapper/crypt-overlay: UUID="3cf6ea24-35cf-4e1f-97ec-e93091cd4f48" MOUNT="/mnt" TYPE="xfs"
+/dev/mapper/crypt-swap: VERSION="1" TYPE="swap"
+/dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9: UUID="0zop6g-3jqS-IGST-ocWa-XQXj-QSdm-SVH7WO" TYPE="LVM2_member"
+
+
+
+13) Mount the crypt-overlay partition. This step verifies the mount works and gives us a secure place to backup the luks header, etc.
+
+root@OpenWrt:/etc/config# mount /dev/mapper/crypt-overlay /mnt
+
+root@OpenWrt:/etc/config# df -h /mnt
+Filesystem                Size      Used Available Use% Mounted on
+/dev/mapper/crypt-overlay
+                       1012.7M     33.3M    979.4M   3% /mnt
+
+14) Backup the luks header to crypt-overlay (/mnt) & **COPY THIS SOMEWHERE PRIVATE**
+
+root@OpenWrt:/mnt# cryptsetup luksHeaderBackup --header-backup-file luks-2084de11-70c4-4521-8f95-6113e75f1fe9.header /dev/md0
+root@OpenWrt:/mnt# chmod 0600 luks-2084de11-70c4-4521-8f95-6113e75f1fe9.header
+root@OpenWrt:/mnt# ls -l luks-2084de11-70c4-4521-8f95-6113e75f1fe9.header
+-rw-------    1 root     root       1052672 Jan  2 03:16 luks-2084de11-70c4-4521-8f95-6113e75f1fe9.header
+root@OpenWrt:/mnt# scp luks-2084de11-70c4-4521-8f95-6113e75f1fe9.header 192.168.1.1:/another/crypt
+
+NOTE: This is the luks header WITHOUT the key file in a slot, only the passphrase.  Restoring it will wipe the key file.
+
+
+15) Generate a key file in crypt-overlay (/mnt) & ***COPY THIS SOMEWHERE PRIVATE**.  Depending on your level of paranoia, this key file could be copied elsewhere & curl'ed.  However, that's extreme.  Putting the key file on a separate device is the only requirement because it needs to be read to open the crypt automatically.  A file-stored key or passphrase has the same security requirements as one entered interactively, however you can use random bytes and thereby use bytes you cannot type on the keyboard.  You can use any file you like as key file, for example a plain text file with a human readable passphrase.  To generate a file with random bytes, use something like this:
+
+root@OpenWrt:/mnt# head -c 256 /dev/random > luks-2084de11-70c4-4521-8f95-6113e75f1fe9.key # may take a while if there's little entropy
+root@OpenWrt:/mnt# scp luks-2084de11-70c4-4521-8f95-6113e75f1fe9.key 192.168.1.1:/another/crypt
+
+
+
+16) Add the key file to a key slot.  At this point, only one key slot should be used ... i.e.
+
+root@OpenWrt:/mnt# cryptsetup luksDump /dev/md0 # Key Slot 0 is the passprase
+LUKS header information for /dev/md0
+
+Version:        1
+Cipher name:    aes
+Cipher mode:    xts-plain64
+Hash spec:      sha256
+Payload offset: 4096
+MK bits:        256
+MK digest:      ed e4 57 db e6 7c 13 5c f4 53 4b bf 14 39 95 38 55 b1 d8 97
+MK salt:        64 3b 3f 00 52 d4 80 e2 87 30 81 c9 b1 cc 3f a9
+                6e 3f 09 28 7a 03 55 05 e9 66 26 21 e4 c0 b7 57
+MK iterations:  158000
+UUID:           2084de11-70c4-4521-8f95-6113e75f1fe9
+
+Key Slot 0: ENABLED
+        Iterations:             1224878
+        Salt:                   f3 32 22 a7 cb bf 73 49 d6 62 7c 20 a5 25 4b 17
+                                a1 57 ef 6d ef f4 81 48 91 70 44 40 3f 52 28 95
+        Key material offset:    8
+        AF stripes:             4000
+Key Slot 1: DISABLED
+Key Slot 2: DISABLED
+Key Slot 3: DISABLED
+Key Slot 4: DISABLED
+Key Slot 5: DISABLED
+Key Slot 6: DISABLED
+Key Slot 7: DISABLED
+
+root@OpenWrt:/mnt# cryptsetup luksAddKey --key-slot 1 /dev/md0 luks-2084de11-70c4-4521-8f95-6113e75f1fe9.key # Key Slot 1 is the key file
+Enter any existing passphrase:
+root@OpenWrt:/mnt# cryptsetup luksDump /dev/md0
+LUKS header information for /dev/md0
+
+Version:        1
+Cipher name:    aes
+Cipher mode:    xts-plain64
+Hash spec:      sha256
+Payload offset: 4096
+MK bits:        256
+MK digest:      ed e4 57 db e6 7c 13 5c f4 53 4b bf 14 39 95 38 55 b1 d8 97
+MK salt:        64 3b 3f 00 52 d4 80 e2 87 30 81 c9 b1 cc 3f a9
+                6e 3f 09 28 7a 03 55 05 e9 66 26 21 e4 c0 b7 57
+MK iterations:  158000
+UUID:           2084de11-70c4-4521-8f95-6113e75f1fe9
+
+Key Slot 0: ENABLED
+        Iterations:             1224878
+        Salt:                   f3 32 22 a7 cb bf 73 49 d6 62 7c 20 a5 25 4b 17
+                                a1 57 ef 6d ef f4 81 48 91 70 44 40 3f 52 28 95
+        Key material offset:    8
+        AF stripes:             4000
+Key Slot 1: ENABLED
+        Iterations:             1236714
+        Salt:                   d9 71 fc ce 78 e3 81 1e b2 db 29 b5 0c 78 ae 2c
+                                1a c1 a3 db c8 4b 33 a6 9e db f5 8f 04 ed 5a 10
+        Key material offset:    264
+        AF stripes:             4000
+Key Slot 2: DISABLED
+Key Slot 3: DISABLED
+Key Slot 4: DISABLED
+Key Slot 5: DISABLED
+Key Slot 6: DISABLED
+Key Slot 7: DISABLED
+
+
+NOTE: Using ImageBuilder; putting the key in the image is OK security. If the encrypted disk(s) get separated from where the image is installed then there's little hope the disk(s) will be decrypted *unless* the person also has access to the unencrypted image.  Pulling it out of embedded firmware isn't easy unless you've got the root password.  Putting the key on another networked machine, e.g. https or nfs v4 server, has the added requirement that Openwrt be able to obtain the key BEFORE (re)mounting /overlay.  Doable, but extreme and error prone.  Either way, Openwrt has to store the key unencrypted to automate the process of opening the crypt.  Choose your poison.
+
+
+
+17) Test the key file.
+
+17a) Copy the key file somewhere outside of the crypt, e.g. /tmp
+
+root@OpenWrt:/mnt# cp luks-2084de11-70c4-4521-8f95-6113e75f1fe9.key /tmp
+root@OpenWrt:/mnt# cd /tmp
+
+17b) Unmount /mnt
+
+root@OpenWrt:/tmp# umount /mnt
+
+root@OpenWrt:/tmp# df -h
+Filesystem                Size      Used Available Use% Mounted on
+/dev/root                 9.0M      9.0M         0 100% /rom
+tmpfs                   245.5M    108.0K    245.4M   0% /tmp
+/dev/loop0              100.7M     14.9M     41.8M  26% /overlay
+overlayfs:/overlay      100.7M     14.9M     41.8M  26% /
+/dev/sda1                15.7M      3.1M     12.3M  20% /boot
+/dev/sda1                15.7M      3.1M     12.3M  20% /boot
+tmpfs                   512.0K         0    512.0K   0% /dev
+
+root@OpenWrt:/tmp# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+/dev/mapper/crypt-overlay: UUID="3cf6ea24-35cf-4e1f-97ec-e93091cd4f48" TYPE="xfs"
+/dev/mapper/crypt-swap: VERSION="1" TYPE="swap"
+/dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9: UUID="0zop6g-3jqS-IGST-ocWa-XQXj-QSdm-SVH7WO" TYPE="LVM2_member"
+
+17c) Deactivate the crypt volume group.
+
+root@OpenWrt:/tmp# lvchange -a n crypt
+
+17c) Close the crypt.
+
+root@OpenWrt:/tmp# cryptsetup luksClose /dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9
+
+root@OpenWrt:/tmp# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+
+17d) Open the crypt with the key file. (notice it doesn't ask for a passphrase)
+
+root@OpenWrt:/tmp# cryptsetup luksOpen --key-file /tmp/luks-2084de11-70c4-4521-8f95-6113e75f1fe9.key /dev/md0 luks-2084de11-70c4-4521-8
+f95-6113e75f1fe9
+
+root@OpenWrt:/tmp# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+/dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9: UUID="0zop6g-3jqS-IGST-ocWa-XQXj-QSdm-SVH7WO" TYPE="LVM2_member"
+
+17e) Activate the crypt volume group.
+
+root@OpenWrt:/tmp# lvchange -a y crypt
+
+root@OpenWrt:/tmp# block info
+/dev/loop0: UUID="ca8a639a-636f-46b8-a0cf-451c9853a856" VERSION="1.10" MOUNT="/overlay" TYPE="f2fs"
+/dev/sda1: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" VERSION="1.0" MOUNT="/boot" TYPE="ext4"
+/dev/sda2: UUID="97c8d90d-b27bd480-1ad42847-e1c643a4" VERSION="4.0" MOUNT="/rom" TYPE="squashfs"
+/dev/sdb: UUID="e0b635e1-3a4f-d2db-e9ff-1ae2052cd032" LABEL="OpenWrt:0" TYPE="linux_raid_member"
+/dev/md0: UUID="2084de11-70c4-4521-8f95-6113e75f1fe9" TYPE="crypto_LUKS"
+/dev/mapper/crypt-overlay: UUID="3cf6ea24-35cf-4e1f-97ec-e93091cd4f48" TYPE="xfs"
+/dev/mapper/crypt-swap: VERSION="1" TYPE="swap"
+/dev/mapper/luks-2084de11-70c4-4521-8f95-6113e75f1fe9: UUID="0zop6g-3jqS-IGST-ocWa-XQXj-QSdm-SVH7WO" TYPE="LVM2_member"
+
+17f) Re-mount crypt-overlay to /mnt.
+
+root@OpenWrt:/tmp# mount /dev/mapper/crypt-overlay /mnt
+
+root@OpenWrt:/tmp# df -h /mnt
+Filesystem                Size      Used Available Use% Mounted on
+/dev/mapper/crypt-overlay
+                       1012.7M     34.3M    978.4M   3% /mnt
+
+root@OpenWrt:/tmp# ls -l /mnt
+-rw-------    1 root     root       1052672 Jan  2 03:16 luks-2084de11-70c4-4521-8f95-6113e75f1fe9.header
+-rw-r--r--    1 root     root           256 Jan  2 03:35 luks-2084de11-70c4-4521-8f95-6113e75f1fe9.key
+
+
+18) So far, so good.
+
+TODO: Bug? The mdadm package seems to have an, or installs an erroneous uuid in /etc/config/mdadm that doesn't match the uuid created via mdadm create ... or maybe it leaves/installs a config in /var/etc/mdadm.conf that gets read? (NO) by /etc/init.d/mdadm on first boot, uuids don't match, & meta device never starts.  need to investigate further.  manually fixing uci uuid corrects (permanently).
+
+# temp fix
+md=0; for uuid in $(block info | grep linux_raid_member | awk '{print $2}' | awk -F\" '{print $(NF-1)}');do uci set mdadm.@array[$md].device="/dev/md${md}"; uci set mdadm.@array[${md}].uuid=$uuid; let md=$md+1; done; uci commit
+
+
+/etc/init.d/mdadm
+
+/etc/init.d/boot is S10 & K98 && runs /sbin/mount_root
+/etc/init.d/system is S10
+/etc/init.d/sysctl is S11
+/etc/init.d/log is S12 & K89
+/etc/init.d/rpcd is S12
+/etc/init.d/mdadm is S13 & K98 (Bug? umount is S99)
+# crypsetup needs to be S13 or S14
+/etc/init.d/lvm2 is S15 (no K in 18.06)
+/ec/init.d/nework is S20 & S90
+/etc/init.d/fstab is S40 && runs /sbin/block mount (and /sbin/block umount)?
+/etc/init.d/done is S95 && runs /etc/rc.local
+/etc/init.d/umount is S99
+
+
+
+
+
+
+
+
+
+
+
+
+
+13) Automate cryptsetup luksOpen.  There are many considerations, here.  This objective is simply to get block info to show the crypt after reboot.  mdadm already has an init script, but the Openwrt 18 cryptsetup package doesn't support /etc/crypttab off the shelf.
+
+I found this somewhat useful, https://openwrt.org/docs/guide-user/storage/disk.encryption however, the script there is based on bash and intended for hotplug.  I'm not that familiar with Openwrt hotplug and I'd rather the machine break if the drive was unplugged
+
+
+# name encrypted-device password options
+
+       Example 1. /etc/crypttab example
+
+       Set up four encrypted block devices. One using LUKS for normal storage, another one for usage as a swap device and two
+       TrueCrypt volumes.
+
+           luks       UUID=2505567a-9e27-4efe-a4d5-15ad146c258b
+           swap       /dev/sda7       /dev/urandom       swap
+           truecrypt  /dev/sda2       /etc/container_password  tcrypt
+           hidden     /mnt/tc_hidden  /dev/null    tcrypt-hidden,tcrypt-keyfile=/etc/keyfile
+
+
+#
+# Pause for a minute.  Consider enabling logging.  Reboot?
+#
+
+uci set system.@system[0].log_file='/var/log/messages'
+uci set system.@system[0].klogconloglevele='8'
+uci set system.@system[0].conloglevel='8'
+uci set system.@system[0].log_type='file'
+uci set system.@system[0].log_size='64'
+uci commit system
+
