@@ -1,0 +1,56 @@
+adam2                          START=00
+sysfixtime                     START=00 STOP=90
+nvram.init                     START=02
+admswconfig                    START=05
+wlunbind                       START=09
+boot                           START=10 STOP=98
+system                         START=10
+om-watchdog.init               START=11 STOP=11
+sysctl                         START=11
+sysfsutils                     START=11
+log.init                       START=12 STOP=89
+rpcd.init                      START=12
+mdadm.init                     START=13 STOP=98
+zram.init                      START=15
+dnsmasq.init                   START=19
+dropbear.init                  START=19 STOP=50
+firewall.init                  START=19
+network                        START=20 STOP=90
+usbmode.init                   START=20
+conntrackd.init                START=21 STOP=89
+watchdog                       START=25
+vmmc.init                      START=31
+odhcpd.init                    START=35 STOP=85
+fstab.init                     START=40
+kdump.init                     START=41 STOP=98
+wmacfixup                      START=41
+br2684ctl                      START=50
+cron                           START=50
+qos                            START=50
+uhttpd.init                    START=50
+samba.init                     START=60
+ipset-dns.init                 START=61
+blockd.init                    START=80
+relay.init                     START=80
+trelay.init                    START=80
+ugps.init                      START=80
+umdns.init                     START=80
+lldpd.init                     START=90 STOP=01
+openvpn.init                   START=90 STOP=10
+gpio_switch                    START=94 STOP=10
+done                           START=95
+led                            START=96
+rssileds.init                  START=96 STOP=96
+dsl_control                    START=97
+linksys_recovery               START=97
+hwmon_fancontrol               START=98
+sysntpd                        START=98
+adb-enablemodem                START=99
+bootcount                      START=99
+bugcheck.initd                 START=99
+igmpproxy.init                 START=99
+netdev-cpu                     START=99
+omcproxy.init                  START=99
+set-irq-affinity               START=99
+umount                         STOP=99
+urandom_seed                   START=99
