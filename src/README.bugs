@@ -1,0 +1,7 @@
+Bugs encountered during build/test ...
+
+* postfix
+
+postfix/postlog: warning: smtputf8_enable is true, but EAI support is not compiled in
+mail.warn postfix/local[25486]: warning: service not found: biff/udp 
+
