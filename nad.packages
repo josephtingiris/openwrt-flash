@@ -1,0 +1,13 @@
+# disk utils
+block-mount
+cryptsetup
+fdisk
+# GUI - minimal
+luci-ssl-openssl
+luci-theme-bootstrap
+# GUI - optional
+# sys utils
+sysfsutils
+# network utils
+nmap
+rsync
