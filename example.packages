@@ -1,0 +1,21 @@
+# kernel
+kmod-usb-storage
+# disk
+block-mount
+fdisk
+# GUI - minimal
+luci-ssl-openssl
+luci-theme-bootstrap
+# GUI - optional
+#netdata
+# sys
+bash
+lsblk
+sysfsutils
+# network
+nmap
+rsync
+# usb
+usb-modeswitch
+usbreset
+usbutils
