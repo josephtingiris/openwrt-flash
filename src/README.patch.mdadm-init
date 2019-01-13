@@ -1,0 +1,58 @@
+mdadm: add new init features; documentation; bug fixes
+
+This is a significant revision of /etc/init.d/mdadm.  It adds new
+features, support for new configuration options, safer error
+handling, (configurable) verbose output, and contains multiple bug
+fixes.
+
+Most notably, mdadm was being started with the --config flag and
+that prevented it from using its built in Auto Assembly features.
+Users were required to put a correct uuid in /etc/config/mdadm.
+Configuring arrays is not for the feint of heart.
+
+The previous /etc/config/mdadm options left uncommented, that prevented
+mdadm from starting successfully, were corrected and the default startup
+mode is now to automatically assemble all RAID arrays attached to the
+machine using device scans rather than configuation options and a
+persistent state file.
+
+A new UCI section, config mdadm global, was added with new options that are
+supported by the accompanying /etc/init.d/mdadm. Documentation for all
+new (and previous) options was added as well.  See the
+/etc/config/mdadmin or mdadm.init file itself for more details.
+
+Additionally, a new stateful 'auto' feature was added that functions
+similarly to the stateless Auto Assembly feature.  The benefits of
+stateful auto assembly are to support features that mdadm 4.0 will only
+read from a configuration file, such as setting the MAILFROM value.  The
+new mdadm_conf_auto() function will also greatly aid users in
+troubleshooting.  When verbose is turned on it provides tips, better
+visibility for what's actually happening, and sets the stage for
+moderately advanced users to take more control over their RAIDs.
+
+Stateful UCI only configurations are still supported and will still work.
+All previously existing configurations will work in this mode.  However,
+these users will now have to explicitly turn it on.  Documentation is
+provided in the new mdadm.config file.  I'd expect very few regressions.
+Anyone using the old init had to be an expert.  The mdadm 4.0-5 package
+doesn't function out of the box.  For more detail about these parts,
+see FS2043 here https://bugs.openwrt.org/
+
+A new reload_service() function was added to prevent reloads from
+stopping mdadm.  That caused issues when filesystems were mounted.
+Reloads will now be ignored, though the stage is set for reloads to
+trigger scans for new devices.  Explicit restarts still work as expected.
+
+The start_service() function was enhanced to query new UCI mdadm.global
+options: alert_program, config, email, email_from, monitor_frequency,
+and verbose.  Each is documented in /etc/mdadm/config (config.init) and
+some additional code comments were added.  As well, error handling and
+verbose output was greatly enhanced.  It's not going to do anything
+without users knowing what's going on (if verbose is turned on).
+Backward compatibility was retained.  Strict reliance on a shell global
+($CONF) was removed and replaced with a single global ($TMP_FILE) that's
+for development convenience.  When/if a config file is not specified in
+the UCI config, it will fall back to using $TMP_FILE as the
+configuration file.
+
+Incremented PKG_RELEASE from 5 to 6
