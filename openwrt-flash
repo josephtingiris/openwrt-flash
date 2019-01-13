@@ -4,18 +4,26 @@
 
 # build openwrt flash images
 
+x86_64_Image_MB=128
+
+Test=0 # 0=true, 1=false
+
 function aborting() {
     local msg="$@"
     printf "\naborting ... $msg\n"
     exit 1
 }
 
-function buildX86CombinedVmdk() {
+function buildX86Combined() {
 
     local image_names="$1"
     if [ "$image_names" == "" ]; then
-        image_names="*"
+        image_names="*-*-*x86-*combined-*.img.gz"
     fi
+
+    pprint
+    pprint "$FUNCNAME - $@"
+    pprint
 
     local image image_gz image_vmdk
 
@@ -42,6 +50,20 @@ function buildX86CombinedVmdk() {
         if [ $? -ne 0 ]; then
             continue
         fi
+
+        image_mk=$((${x86_64_Image_MB}*1024))
+        local -i image_k=$(find "${image}" -printf "%k\n" 2> /dev/null)
+        image_k_count=$((${image_mk}-${image_k}))
+
+        if [ ${image_k_count} -gt 0 ]; then
+            pprint "minimum image_m=$x86_64_Image_MB ($image_mk)"
+            pprint "actual  image_k=$image_k"
+            pprint "image_k_count=$image_k_count"
+            dd oflag=append conv=notrunc bs=1k count=${image_k_count} if=/dev/zero of=${image}
+            ls -lhd ${image}
+            fdisk -l ${image}
+        fi
+
         qemu-img convert -f raw -O vmdk "${image}" "${image_vmdk}"
 
         gzip "${image}"
@@ -50,7 +72,7 @@ function buildX86CombinedVmdk() {
         fi
 
         image="" image_vmdk=""
-    done <<< "$(find "${Top_Dir}" -name "*-${image_names}-*x86-*combined-*.img.gz" 2> /dev/null)"
+    done <<< "$(find "${Top_Dir}" -name "${image_names}" 2> /dev/null)"
 
 }
 
@@ -66,7 +88,7 @@ function pprint() {
 }
 
 function usage() {
-    printf "\nusage: $0 <image name|vmdk> [clean]\n\n"
+    printf "\nusage: $0 <image name> [clean|vmdk]\n\n"
     exit 1
 }
 
@@ -101,7 +123,9 @@ if [ "$2" == "clean" ]; then
     fi
 fi
 
-if [ "${Image_Name}" != "vmdk" ]; then
+if [ "${2}" == "vmdk" ]; then
+    buildX86Combined "*-${Image_Name}-*-*x86-*combined-*.img.gz"
+else
 
     for DIR in Archetype_Dir Image_Name_Dir Image_Root_Dir Tmp_Dir Top_Dir; do
         if [ "${!DIR}" == "" ]; then
@@ -127,7 +151,7 @@ if [ "${Image_Name}" != "vmdk" ]; then
 
     Image_Build_Count=1
     if [ -r "${Image_Build}" ]; then
-        Image_Build_Count=$(head -1 "${Image_Build}" | awk -F- '{print $NF}')
+        Image_Build_Count=$(head -1 "${Image_Build}" | grep ^${Image_Date} | awk -F- '{print $NF}')
         if [[ ${Image_Build_Count} =~ ^[0-9]+$ ]]; then
             # it's an integer
             ((Image_Build_Count++))
@@ -135,7 +159,7 @@ if [ "${Image_Name}" != "vmdk" ]; then
             Image_Build_Count=1
         fi
     fi
-    echo "${Image_Build_Count}" > "${Image_Build}"
+    echo "${Image_Date}-${Image_Build_Count}" > "${Image_Build}"
     Extra_Image_Name="${Image_Name}-${Image_Date}-${Image_Build_Count}"
     pprint "Extra_Image_Name = ${Extra_Image_Name}"
 
@@ -176,7 +200,9 @@ if [ "${Image_Name}" != "vmdk" ]; then
     let Image_Counter=0
     for Image in ${Images[@]}; do
         ((++Image_Counter))
-        pprint "[${Image_Counter}] Processing = ${Extra_Image_Name}"
+
+        pprint
+        pprint "[${Image_Counter}] Processing = ${Extra_Image_Name} - ${Image_Url}"
 
         cd "${Tmp_Dir}"
         if [ $? -ne 0 ]; then
@@ -190,6 +216,24 @@ if [ "${Image_Name}" != "vmdk" ]; then
         else
             pprint "[${Image_Counter}] Image_Url = ${Image_Url}"
         fi
+
+        Image_Platform=$(echo "${Image_Url}" | awk -Ftargets/ '{print $NF}' | awk -F/openwrt '{print $1}' | sed -e 's#/#-#g' -e 's#/-generic##g')
+        pprint "[${Image_Counter}] Image_Platform = ${Image_Platform}"
+
+        Image_Profile=$(echo ${Image} | awk -F, '{print $2}')
+        if [ "${Image_Profile}" == "" ]; then
+            pprint "[${Image_Counter}] Image_Profile = DEFAULT"
+            Image_Profile="."
+        else
+            pprint "[${Image_Counter}] Image_Profile = ${Image_Profile}"
+        fi
+
+        if [[ "${Image_Url}" == */snapshots/* ]]; then
+            Image_Version=snapshot
+        else
+            Image_Version=$(echo "${Image_Url}" | awk -Freleases/ '{print $NF}' | awk -F/ '{print $1}' | sed -e 's#/#-#g' -e 's#/-generic##g')
+        fi
+        pprint "[${Image_Counter}] Image_Version = ${Image_Version}"
 
         Image_Tar_Xz=$(basename ${Image_Url})
         if [ "${Image_Tar_Xz}" == "" ] || [ "${Image_Tar_Xz:${#Image_Tar_Xz}-7:7}" != ".tar.xz" ]; then
@@ -237,14 +281,6 @@ if [ "${Image_Name}" != "vmdk" ]; then
             aborting "cd ${Image_Dir} failed"
         fi
 
-        Image_Profile=$(echo ${Image} | awk -F, '{print $2}')
-        if [ "${Image_Profile}" == "" ]; then
-            pprint "[${Image_Counter}] Image_Profile = DEFAULT"
-            Image_Profile="."
-        else
-            pprint "[${Image_Counter}] Image_Profile = ${Image_Profile}"
-        fi
-
         Make_Profile=$(make info | grep :$ | grep -v Available\ Profiles | grep ${Image_Profile} | sed -e '/:$/s///g')
         if [ "${Make_Profile}" == "" ]; then
             pprint "[${Image_Counter}] Image_Profile = DEFAULT"
@@ -260,22 +296,44 @@ if [ "${Image_Name}" != "vmdk" ]; then
         echo "Profile  = ${Make_Profile}" >> "${Image_Readme}"
 
         if [ "$2" == "clean" ]; then
-            make clean
+            if [ $Test -eq 0 ]; then
+                make clean
+            fi
         fi
 
         echo
         echo "make image PROFILE=${Make_Profile} PACKAGES=\"${Packages[@]}\" EXTRA_IMAGE_NAME=\"${Extra_Image_Name}\" BIN_DIR=${Image_Name_Dir} FILES=${Image_Root_Dir}/" > make.${Extra_Image_Name}
         cat make.${Extra_Image_Name}
-        source make.${Extra_Image_Name}
+        if [ $Test -eq 0 ]; then
+            source make.${Extra_Image_Name}
+        fi
         if [ $? -ne 0 ]; then
             aborting "make failed"
         fi
         echo
 
+        if [ "${Image_Platform}" == "x86-64" ]; then
+            pprint
+            cd "${Image_Name_Dir}"
+            pwd
+            if [ "$Image_Version" != "snapshot" ]; then
+                x86_64_Squashfs_Img_Gz="openwrt-${Extra_Image_Name}-${Image_Platform}-combined-squashfs.img.gz"
+            else
+                x86_64_Squashfs_Img_Gz="openwrt-${Image_Version}-${Extra_Image_Name}-${Image_Platform}-combined-squashfs.img.gz"
+            fi
+            x86_64_Squashfs_Img=${x86_64_Squashfs_Img_Gz%%.gz*}
+            x86_64_Squashfs_Img_Vmdk=${x86_64_Squashfs_Img}.vmdk
+            if [ -r "${x86_64_Squashfs_Img_Gz}" ]; then
+                pprint "found x86-64 combined ${x86_64_Squashfs_Img_Gz}"
+                buildX86Combined "${x86_64_Squashfs_Img_Gz}"
+            else
+                echo "not found ${x86_64_Squashfs_Img_Gz}"
+                exit
+            fi
+        fi
+
         # done, unset
         unset -v Image_Url Image_Profile Image_Tar_Xz Image_Dir Image_File Make_Profile
     done
 fi
-
-buildX86CombinedVmdk "${Extra_Image_Name}"
 
