@@ -7,3 +7,6 @@
 [submodule "src/openwrt.packages"]
 	path = src/openwrt.packages
 	url = https://github.com/openwrt/packages
+[submodule "src/josephtingiris.packages"]
+	path = src/josephtingiris.packages
+	url = git@github.com:josephtingiris/packages
