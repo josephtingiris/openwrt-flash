@@ -1,5 +1,5 @@
 e.g.
 # double check
-/usr/bin/git send-email -3 --suppress-cc=self --to=jtingiris@gmail.com
+/usr/bin/git send-email -3 --compose --suppress-cc=self --to=jtingiris@gmail.com
 # send
 /usr/bin/git send-email -3 --to=openwrt-devel@lists.openwrt.org

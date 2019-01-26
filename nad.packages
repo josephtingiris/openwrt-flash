@@ -19,9 +19,13 @@ luci-theme-bootstrap
 # GUI - optional
 # sys
 lsblk
+lvm2
+mdadm
 sysfsutils
 # network
 nmap
+openssh-sftp-server
+sshfs
 rsync
 # usb
 usb-modeswitch

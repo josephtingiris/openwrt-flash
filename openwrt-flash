@@ -73,7 +73,6 @@ function buildX86Combined() {
 
         image="" image_vmdk=""
     done <<< "$(find "${Top_Dir}" -name "${image_names}" 2> /dev/null)"
-
 }
 
 function pprint() {
@@ -202,7 +201,7 @@ else
         ((++Image_Counter))
 
         pprint
-        pprint "[${Image_Counter}] Processing = ${Extra_Image_Name} - ${Image_Url}"
+        pprint "[${Image_Counter}] Processing = ${Extra_Image_Name} ..."
 
         cd "${Tmp_Dir}"
         if [ $? -ne 0 ]; then
@@ -316,11 +315,15 @@ else
             pprint
             cd "${Image_Name_Dir}"
             pwd
-            if [ "$Image_Version" != "snapshot" ]; then
+            echo
+
+            if [ "$Image_Version" == "snapshot" ]; then
                 x86_64_Squashfs_Img_Gz="openwrt-${Extra_Image_Name}-${Image_Platform}-combined-squashfs.img.gz"
             else
                 x86_64_Squashfs_Img_Gz="openwrt-${Image_Version}-${Extra_Image_Name}-${Image_Platform}-combined-squashfs.img.gz"
             fi
+            pprint "[${Image_Counter}] x86_64_Squashfs_Img_Gz = ${x86_64_Squashfs_Img_Gz}"
+
             x86_64_Squashfs_Img=${x86_64_Squashfs_Img_Gz%%.gz*}
             x86_64_Squashfs_Img_Vmdk=${x86_64_Squashfs_Img}.vmdk
             if [ -r "${x86_64_Squashfs_Img_Gz}" ]; then
