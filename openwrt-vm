@@ -1,0 +1,166 @@
+#!/bin/bash
+
+# start a virtual machine with an openwrt (x86-64) image
+
+# 20190126, joseph.tingiris@gmail.com
+
+# todo:
+# automatically determine qemu-system binary from image, e.g. qemu-system-x86_64, i386, arm, etc.
+
+
+qemu=qemu-system-x86_64
+
+function usage() {
+    echo
+    echo "usage: $0 <boot image>"
+    echo
+    if [ "$1" != "" ]; then
+        echo "$@"
+    fi
+    exit 2
+}
+
+if [ ${#1} -eq 0 ]; then
+    usage
+fi
+
+base_dir=$(dirname $(readlink -e $0))
+base_dir_vm=${base_dir}/vm
+
+boot="$(readlink -e $1)"
+
+if [ ! -r "${boot}" ]; then
+    usage "${boot} file not readable"
+fi
+
+name=${boot##*/}
+name=${name%*.gz}
+echo "name       = $name"
+
+echo "base_dir   = ${base_dir}"
+
+if ! mkdir -p "${base_dir}/vm/${name}"; then
+    usage "failed to mkdir -p ${base_dir}/vm/${name}"
+fi
+
+cd "${base_dir_vm}/${name}"
+echo "directory  = $(pwd)"
+
+if [ ! -r "${name}" ]; then
+    if file ${boot} | grep "gzip compressed" &> /dev/null; then
+        cp "${boot}" .
+        gunzip $(basename ${boot})
+    fi
+fi
+
+if [ -r "${name}" ]; then
+    if ! file ${name} | grep boot &> /dev/null; then
+        usage "'${name}' is not bootable"
+    fi
+else
+    usage "'${name}' file not readable"
+fi
+
+qemu_args=()
+
+ram=256
+
+hd_extras_size="128M"
+
+hd_extras=()
+hd_extras+=(extra1.qcow2)
+hd_extras+=(extra2.qcow2)
+
+for hd_extra in ${hd_extras[@]}; do
+    if [ ! -f $hd_extra ]; then
+        qemu-img create -f qcow2 $hd_extra $hd_extras_size
+    fi
+done
+
+kill $(ps -ef | grep "$qemu -name $name" | grep -v grep | awk '{print $2}') 2> /dev/null
+
+
+qemu_args+=(-name $name)
+qemu_args+=(-enable-kvm)
+qemu_args+=(-localtime)
+if [ ${#ram} -gt 0 ]; then
+    qemu_args+=(-m $ram)
+fi
+
+if [ ${#DISPLAY} -gt 0 ]; then
+    # note: fedora needed mesa-dri-drivers installed to fix ...
+    # libGL error: unable to load driver: swrast_dri.so
+    #qemu_args+=(-display sdl) # this works but is slow over ssh X forwarding
+    qemu_args+=(-display curses)
+else
+    qemu_args+=(-display curses)
+fi
+
+qemu_args+=(-boot c)
+if file ${name} | grep DOS &> /dev/null; then
+    qemu_args+=(-drive file=${name},format=raw)
+else
+    qemu_args+=(-drive file=${name})
+fi
+
+for hd_extra in ${hd_extras[@]}; do
+    if [ -r $hd_extra ]; then
+        qemu_args+=(-drive file=$hd_extra)
+    fi
+done
+
+# if they're bridges then these need to be allowed in /etc/qemu/bridge.conf
+wan=$(ip r s default | sed -nEe "1s#^.* dev (.*) proto.*#\1#p")
+
+if [ ${#wan} -gt 0 ]; then
+    # wan (eth0)
+
+    if [ -r /sys/class/net/$wan/bridge ] && grep -i "^allow $wan" /etc/qemu/bridge.conf &> /dev/null; then
+        wan_mac=52:54:$(echo $name | md5sum | cut -c 1-8 | sed 's/../&:/g;s/:$//')
+        echo "wan mac    = $wan_mac ($wan)"
+        qemu_args+=(-net nic,macaddr=$wan_mac,model=virtio)
+        qemu_args+=(-net bridge,br=$wan)
+    else
+        echo
+        echo "NOTICE: wan '$wan' is NOT a bridge or allowed in /etc/qemu/bridge.conf"
+        echo
+        qemu_args+=(-device e1000,netdev=wan,id=eth0)
+    fi
+else
+    echo
+    echo "NOTICE: no wan bridges found"
+    echo
+    qemu_args+=(-device e1000,netdev=wan,id=eth0)
+fi
+
+while read bridge; do
+    bridge=${bridge%/*}
+    bridge=${bridge##*/}
+    [ "$bridge" == "$wan" ] && continue
+    lan=$bridge
+done <<< "$(find -L /sys/class/net -maxdepth 2 -name bridge 2> /dev/null)"
+
+if [ ${#lan} -gt 0 ]; then
+    # lan (eth1)
+    if [ -r /sys/class/net/$lan/bridge ] && grep -i "^allow $lan" /etc/qemu/bridge.conf &> /dev/null; then
+        lan_mac=52:54:$(echo $name | md5sum | cut -c 1-8 | rev | sed 's/../&:/g;s/:$//')
+        echo "lan mac    = $lan_mac ($lan)"
+        qemu_args+=(-net nic,macaddr=$lan_mac,model=virtio)
+        qemu_args+=(-net bridge,br=$lan)
+        sudo ip addr add 192.168.1.11/24 dev $lan &> /dev/null
+    else
+        echo
+        echo "NOTICE: lan '$lan' is NOT a bridge or allowed in /etc/qemu/bridge.conf"
+        echo
+        qemu_args+=(-device e1000,netdev=lan,id=eth1)
+    fi
+else
+    echo
+    echo "NOTICE: no lan bridges found"
+    echo
+    qemu_args+=(-device e1000,netdev=lan,id=eth1)
+fi
+
+echo
+echo "${qemu} ${qemu_args[@]}"
+${qemu} ${qemu_args[@]}
